@@ -1,4 +1,5 @@
 import { registerEnumType } from '@nestjs/graphql';
+import { BookingMode } from './booking.enum';
 
 // --- Property Type ---
 export enum PropertyType {
@@ -13,12 +14,28 @@ registerEnumType(PropertyType, { name: 'PropertyType' });
 
 // --- Property Status ---
 export enum PropertyStatus {
-    HOLD = 'HOLD',
+    DRAFT = 'DRAFT',
+    PENDING_REVIEW = 'PENDING_REVIEW',
     ACTIVE = 'ACTIVE',
+    SUSPENDED = 'SUSPENDED',
+    ARCHIVED = 'ARCHIVED',
+
+    // Legacy statuses kept during additive MongoDB migration.
+    HOLD = 'HOLD',
     BOOKED = 'BOOKED',
     DELETE = 'DELETE',
 }
 registerEnumType(PropertyStatus, { name: 'PropertyStatus' });
+
+export { BookingMode };
+
+export enum CancellationPolicy {
+    FLEXIBLE = 'FLEXIBLE',
+    MODERATE = 'MODERATE',
+    FIRM = 'FIRM',
+}
+
+registerEnumType(CancellationPolicy, { name: 'CancellationPolicy' });
 
 // --- Property Location ---
 export enum PropertyLocation {

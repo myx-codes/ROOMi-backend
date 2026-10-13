@@ -15,7 +15,10 @@ const readBoolean = (value: string | undefined, defaultValue: boolean): boolean 
   return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
 };
 
-const enableIntrospection = readBoolean(process.env.GRAPHQL_INTROSPECTION, true);
+const enableIntrospection = readBoolean(
+  process.env.GRAPHQL_INTROSPECTION,
+  process.env.NODE_ENV !== 'production',
+);
 
 @Module({
   imports: [
@@ -44,14 +47,12 @@ const enableIntrospection = readBoolean(process.env.GRAPHQL_INTROSPECTION, true)
         code: error?.extensions.code,
         message,
       };
-      console.log("GraphGQ Global Error", graphQLFormattedError);
       return graphQLFormattedError;
     },
-  }), 
-  ComponentsModule, 
+  }),
+  ComponentsModule,
   DatabaseModule, SocketModule],
   controllers: [AppController],
   providers: [AppService, AppResolver],
 })
 export class AppModule {}
- 

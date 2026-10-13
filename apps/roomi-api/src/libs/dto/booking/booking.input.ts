@@ -1,7 +1,7 @@
 import { Field, InputType, Int, ID } from '@nestjs/graphql';
-import { IsNotEmpty, IsNumber, IsOptional, Matches, Min } from 'class-validator';
+import { IsNotEmpty, IsOptional, Matches, Min } from 'class-validator';
 import { Types } from 'mongoose';
-import { BookingStatus } from '../../enums/booking.enum';
+import { BookingMode, BookingStatus } from '../../enums/booking.enum';
 
 const YMD_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -9,6 +9,11 @@ const YMD_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 export class BookingInput {
     @Field(() => ID)
     propertyId: Types.ObjectId;
+
+    /** Hotel/sanatorium room type or a specific cabin/apartment unit. */
+    @IsOptional()
+    @Field(() => ID, { nullable: true })
+    unitId?: Types.ObjectId;
 
     @Field(() => String, { description: 'Check-in sana: YYYY-MM-DD' })
     @Matches(YMD_PATTERN, { message: 'bookingStart formati YYYY-MM-DD bo\'lishi kerak (masalan: 2026-05-20)' })
@@ -20,6 +25,36 @@ export class BookingInput {
 
     @Field(() => Int)
     bookingGuests: number;
+
+    /** Number of identical rooms/cabins requested. Usually 1 for entire units. */
+    @IsOptional()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    quantity?: number;
+
+    @IsOptional()
+    @Field(() => BookingMode, { nullable: true })
+    bookingMode?: BookingMode;
+
+    @IsOptional()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    adults?: number;
+
+    @IsOptional()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    children?: number;
+
+    @IsOptional()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    infants?: number;
+
+    @IsOptional()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    pets?: number;
 
     @Field(() => Int, { nullable: true })
     totalPrice?: number;

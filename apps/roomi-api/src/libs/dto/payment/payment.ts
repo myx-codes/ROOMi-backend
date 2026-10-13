@@ -25,6 +25,15 @@ export class Payment {
     @Field(() => String, { nullable: true })
     transactionId?: string;
 
+    @Field(() => String, { nullable: true })
+    providerTransactionId?: string | null;
+
+    @Field(() => String, { nullable: true })
+    idempotencyKey?: string | null;
+
+    @Field(() => Boolean, { nullable: true })
+    legacy?: boolean;
+
     @Field(() => Date, { nullable: true })
     paidAt?: Date;
 

@@ -14,6 +14,7 @@ import { NoticeService } from './notifaction/notice.service';
 import { NoticeModule } from './notifaction/notice.module';
 import { ChatModule } from './assistant/chat.module';
 import { AgentDashboardModule } from './agent-dashboard/agent-dashboard.module';
+import { BookableUnitModule } from './bookable-unit/bookable-unit.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { AgentDashboardModule } from './agent-dashboard/agent-dashboard.module';
     NoticeModule,
     ChatModule,
     AgentDashboardModule,
+    BookableUnitModule,
   ],
   providers: [],
 })

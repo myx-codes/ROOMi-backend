@@ -1,5 +1,5 @@
 import { Schema } from 'mongoose';
-import { PropertyLocation, PropertyStatus, PropertyType } from '../libs/enums/property.enum';
+import { BookingMode, CancellationPolicy, PropertyLocation, PropertyStatus, PropertyType } from '../libs/enums/property.enum';
 
 const PropertySchema = new Schema(
     {
@@ -12,7 +12,27 @@ const PropertySchema = new Schema(
         propertyStatus: {
             type: String,
             enum: PropertyStatus,
-            default: PropertyStatus.ACTIVE,
+            default: PropertyStatus.PENDING_REVIEW,
+        },
+
+        // Idempotent catalog imports use this internal key; it is not exposed
+        // in the public GraphQL property response.
+        catalogKey: {
+            type: String,
+            index: { unique: true, sparse: true },
+            select: false,
+        },
+
+        bookingMode: {
+            type: String,
+            enum: BookingMode,
+            default: BookingMode.INSTANT,
+            index: true,
+        },
+
+        currency: {
+            type: String,
+            default: 'UZS',
         },
 
         propertyLocation: {
@@ -72,6 +92,37 @@ const PropertySchema = new Schema(
             required: true,
         },
 
+        maxGuests: {
+            type: Number,
+            default: 1,
+            index: true,
+        },
+
+        bedrooms: {
+            type: Number,
+            default: 1,
+        },
+
+        beds: {
+            type: Number,
+            default: 1,
+        },
+
+        bathrooms: {
+            type: Number,
+            default: 1,
+        },
+
+        infantsAllowed: {
+            type: Boolean,
+            default: true,
+        },
+
+        petsAllowed: {
+            type: Boolean,
+            default: false,
+        },
+
         propertyRooms: {
             type: Number,
             required: true,
@@ -87,6 +138,67 @@ const PropertySchema = new Schema(
         propertyCoordinates: {
             lat: { type: Number },
             lng: { type: Number },
+        },
+
+        timezone: {
+            type: String,
+            default: 'Asia/Tashkent',
+        },
+
+        checkInTime: {
+            type: String,
+            default: '14:00',
+        },
+
+        checkOutTime: {
+            type: String,
+            default: '11:00',
+        },
+
+        minNights: {
+            type: Number,
+            default: 1,
+        },
+
+        maxNights: {
+            type: Number,
+            default: 30,
+        },
+
+        advanceNoticeHours: {
+            type: Number,
+            default: 0,
+        },
+
+        preparationTimeHours: {
+            type: Number,
+            default: 0,
+        },
+
+        houseRules: {
+            type: [String],
+            default: [],
+        },
+
+        cancellationPolicy: {
+            type: String,
+            enum: CancellationPolicy,
+            default: CancellationPolicy.MODERATE,
+        },
+
+        cleaningFee: {
+            type: Number,
+            default: 0,
+        },
+
+        petFee: {
+            type: Number,
+            default: 0,
+        },
+
+        extraGuestFee: {
+            type: Number,
+            default: 0,
         },
 
         propertyViews: {

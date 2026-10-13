@@ -1,14 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
-import * as request from 'supertest';
-import { RoomiBatchModule } from './../src/roomi-batch.module';
+import request from 'supertest';
+import { RoomiBatchController } from './../src/roomi-batch.controller';
+import { RoomiBatchService } from './../src/roomi-batch.service';
 
 describe('RoomiBatchController (e2e)', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [RoomiBatchModule],
+      controllers: [RoomiBatchController],
+      providers: [RoomiBatchService],
     }).compile();
 
     app = moduleFixture.createNestApplication();
@@ -19,6 +21,6 @@ describe('RoomiBatchController (e2e)', () => {
     return request(app.getHttpServer())
       .get('/')
       .expect(200)
-      .expect('Hello World!');
+      .expect('ROOMi-batch');
   });
 });

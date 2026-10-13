@@ -70,10 +70,9 @@ export class ChatThreadReply {
   @Field(() => ChatMessage)
   userMessage: ChatMessage;
 
-  @Field(() => ChatMessage)
-  assistantMessage: ChatMessage;
+  @Field(() => ChatMessage, { nullable: true })
+  assistantMessage?: ChatMessage | null;
 
   @Field(() => Int)
   messageCount: number;
 }
-

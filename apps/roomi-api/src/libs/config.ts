@@ -1,5 +1,5 @@
 import { Types } from 'mongoose'; // bson o'rniga mongoose ishlatish tavsiya etiladi
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 import * as path from 'path';
 import { T } from './types/common';
 
@@ -27,7 +27,7 @@ export const availableCommentSorts = ['createdAt', 'updatedAt', 'commentStars'];
 export const validMimeTypes = ['image/png', 'image/jpg', 'image/jpeg', 'image/avif',  'image/webp'];
 export const getSerialForImage = (filename: string) => {
     const ext = path.parse(filename).ext;
-    return uuidv4() + ext;
+    return randomUUID() + ext;
 };
 
 /** MONGOOSE UTILS **/

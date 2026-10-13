@@ -1,10 +1,17 @@
 import { registerEnumType } from '@nestjs/graphql';
 
 export enum PaymentStatus {
-    PENDING = 'PENDING',   // To'lov kutilmoqda
-    SUCCESS = 'SUCCESS',   // To'lov muvaffaqiyatli amalga oshirildi
-    FAILED = 'FAILED',     // To'lovda xatolik yuz berdi
-    REFUNDED = 'REFUNDED', // Pul mijozga qaytarib berildi (masalan, bron bekor qilinganda)
+    CREATED = 'CREATED',
+    PENDING = 'PENDING',
+    SUCCEEDED = 'SUCCEEDED',
+    FAILED = 'FAILED',
+    CANCELLED = 'CANCELLED',
+    REFUND_PENDING = 'REFUND_PENDING',
+    PARTIALLY_REFUNDED = 'PARTIALLY_REFUNDED',
+    REFUNDED = 'REFUNDED',
+
+    // Legacy status kept during additive MongoDB migration.
+    SUCCESS = 'SUCCESS',
 }
 
 registerEnumType(PaymentStatus, {

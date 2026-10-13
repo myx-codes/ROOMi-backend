@@ -42,7 +42,12 @@ export class MemberService {
     }
 
     public async signup(input: MemberInput): Promise<Member>{
-     await this.ensureSingleAdmin(input.memberType);
+     // Public sign-up supports guests and listing agents only. ADMIN remains a
+     // protected role and cannot be requested through the public API.
+     input.memberType = input.memberType === MemberType.AGENT
+          ? MemberType.AGENT
+          : MemberType.USER;
+     (input as any).memberStatus = MemberStatus.ACTIVE;
 
      //Hash Password
      input.memberPassword = await this.authService.hashPassword(input.memberPassword)

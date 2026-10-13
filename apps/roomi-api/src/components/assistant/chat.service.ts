@@ -15,6 +15,10 @@ type ChatMessageDoc = ChatMessage & { _id: Types.ObjectId };
 
 interface AssistantContext {
   language: 'en' | 'ko' | 'uz';
+  platformSummary: string;
+  catalogSummary: string;
+  catalogMatchedTotal: number;
+  catalogItems: any[];
   propertySummary?: string;
   availabilitySummary?: string;
   policySummary: string;
@@ -76,19 +80,6 @@ export class ChatService {
       content: sanitizedMessage,
     });
 
-    const assistantText = await this.generateAssistantReply(
-      threadId,
-      memberId,
-      sanitizedMessage,
-      input.propertyId ?? thread.propertyId ?? null,
-      this.normalizeLanguage(input.language ?? (input as any).language ?? (thread as any).language),
-    );
-    const assistantMessage = await this.chatMessageModel.create({
-      threadId,
-      senderType: ChatSenderType.ASSISTANT,
-      content: assistantText,
-    });
-
     await this.chatThreadModel.updateOne(
       { _id: threadId },
       {
@@ -100,12 +91,76 @@ export class ChatService {
     ).exec();
 
     const populated = await this.populateThread(threadId);
+    const language = this.normalizeLanguage(
+      input.language ?? (input as any).language ?? (thread as any).language,
+    );
+
+    // Return the user message immediately. Ollama can take tens of seconds on
+    // an Intel Mac, so the assistant response is generated and persisted in
+    // the background. The client polls this thread for the next message.
+    void this.generateAndPersistAssistantReply(
+      threadId,
+      memberId,
+      sanitizedMessage,
+      input.propertyId ?? thread.propertyId ?? null,
+      language,
+    );
+
     return {
       thread: populated,
       userMessage: this.mapMessage(userMessage),
-      assistantMessage: this.mapMessage(assistantMessage),
+      assistantMessage: null,
       messageCount: populated.messages?.length ?? 0,
     };
+  }
+
+  private async generateAndPersistAssistantReply(
+    threadId: Types.ObjectId,
+    memberId: Types.ObjectId | null,
+    userMessage: string,
+    propertyId: Types.ObjectId | null,
+    language: SupportedLanguage,
+  ): Promise<void> {
+    try {
+      const assistantText = await this.generateAssistantReply(
+        threadId,
+        memberId,
+        userMessage,
+        propertyId,
+        language,
+      );
+      await this.chatMessageModel.create({
+        threadId,
+        senderType: ChatSenderType.ASSISTANT,
+        content: assistantText,
+      });
+      await this.chatThreadModel.updateOne(
+        { _id: threadId },
+        { $set: { lastMessageAt: new Date(), status: ChatThreadStatus.OPEN } },
+      ).exec();
+    } catch (error) {
+      console.warn('[chatbot] background_reply_failed', {
+        threadId: String(threadId),
+        message: error instanceof Error ? error.message : String(error),
+      });
+
+      const fallback = this.getBackgroundFailureReply(language);
+      await this.chatMessageModel.create({
+        threadId,
+        senderType: ChatSenderType.ASSISTANT,
+        content: fallback,
+      });
+      await this.chatThreadModel.updateOne(
+        { _id: threadId },
+        { $set: { lastMessageAt: new Date(), status: ChatThreadStatus.OPEN } },
+      ).exec();
+    }
+  }
+
+  private getBackgroundFailureReply(language: SupportedLanguage): string {
+    if (language === 'uz') return 'Hozir javob tayyorlashda muammo yuz berdi. Iltimos, birozdan keyin qayta urinib ko‘ring.';
+    if (language === 'ko') return '지금 답변을 준비하는 데 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.';
+    return 'I ran into a problem while preparing the answer. Please try again in a moment.';
   }
 
   private async resolveThread(
@@ -126,6 +181,9 @@ export class ChatService {
         throw new NotFoundException('Chat thread not found');
       }
       if (memberId && !existing.memberId) {
+        if (!sessionId || existing.sessionId !== sessionId) {
+          throw new NotFoundException('Chat thread not found');
+        }
         existing.memberId = memberId;
         existing.sessionId = null;
         await existing.save();
@@ -139,20 +197,13 @@ export class ChatService {
 
     let existing: any = null;
 
-    if (memberId && sessionId) {
+    if (!memberId && sessionId) {
       const guestThread = await this.chatThreadModel.findOne({
         sessionId,
         propertyId: propertyId ?? null,
         memberId: null,
       }).sort({ updatedAt: -1 }).exec();
-
-      if (guestThread) {
-        guestThread.memberId = memberId;
-        guestThread.sessionId = null;
-        guestThread.updatedAt = new Date();
-        await guestThread.save();
-        existing = guestThread;
-      }
+      if (guestThread) existing = guestThread;
     }
 
     if (!existing) {
@@ -219,7 +270,7 @@ export class ChatService {
     propertyId: Types.ObjectId | null,
     language: SupportedLanguage,
   ): Promise<string> {
-    const context = await this.buildAssistantContext(threadId, memberId, propertyId, language);
+    const context = await this.buildAssistantContext(threadId, memberId, propertyId, language, userMessage);
     const structured = this.extractStructuredRequest(userMessage);
     const intent = this.detectIntent(userMessage);
 
@@ -236,6 +287,12 @@ export class ChatService {
       const bookingReply = await this.buildBookingFlowReply(context, propertyId, structured);
       if (bookingReply) return bookingReply;
     }
+
+    const platformReply = this.buildGroundedPlatformReply(context.language, userMessage);
+    if (platformReply) return platformReply;
+
+    const catalogReply = this.buildGroundedCatalogReply(context, userMessage);
+    if (catalogReply) return catalogReply;
 
     const provider = this.resolveProviderConfig();
     const shouldAttemptProvider =
@@ -315,13 +372,17 @@ export class ChatService {
     userMessage: string,
   ): Promise<string | null> {
     const endpoint = `${provider.baseUrl}/chat/completions`;
+    const timeout = this.getProviderTimeout(provider);
+    let providerError: unknown = null;
 
     try {
       const response = await axios.post(
         endpoint,
         {
           model: provider.model,
-          temperature: 0.2,
+          temperature: 0,
+          max_tokens: 384,
+          think: false,
           messages: [
             { role: "system", content: this.buildSystemPrompt(context) },
             ...providerMessages,
@@ -329,7 +390,7 @@ export class ChatService {
           ],
         },
         {
-          timeout: 20000,
+          timeout,
           headers: this.buildProviderHeaders(provider),
         },
       );
@@ -337,10 +398,18 @@ export class ChatService {
       const text = response.data?.choices?.[0]?.message?.content?.trim();
       if (text) return text;
     } catch (error) {
+      providerError = error;
       this.logProviderFailure(provider, endpoint, error);
     }
 
-    if (provider.provider === "ollama") {
+    // Older Ollama builds may not expose the OpenAI-compatible endpoint. Only
+    // fall back to the native endpoint for an actual unsupported-route error;
+    // retrying after a timeout would double the user-visible wait.
+    if (
+      provider.provider === "ollama" &&
+      axios.isAxiosError(providerError) &&
+      [404, 405].includes(providerError.response?.status ?? 0)
+    ) {
       return this.callNativeOllamaProvider(provider, context, providerMessages, userMessage);
     }
 
@@ -362,6 +431,9 @@ export class ChatService {
         {
           model: provider.model,
           stream: false,
+          think: false,
+          keep_alive: "10m",
+          options: { num_predict: 256 },
           messages: [
             { role: "system", content: this.buildSystemPrompt(context) },
             ...providerMessages,
@@ -369,7 +441,7 @@ export class ChatService {
           ],
         },
         {
-          timeout: 20000,
+          timeout: this.getProviderTimeout(provider),
           headers: this.buildProviderHeaders(provider),
         },
       );
@@ -381,6 +453,13 @@ export class ChatService {
     }
 
     return null;
+  }
+
+  private getProviderTimeout(provider: ProviderConfig): number {
+    const defaultTimeout = provider.provider === "ollama" ? 90000 : 20000;
+    const configured = Number(process.env.AI_TIMEOUT_MS ?? defaultTimeout);
+    if (!Number.isFinite(configured)) return defaultTimeout;
+    return Math.min(Math.max(Math.round(configured), 5000), 120000);
   }
 
   private logProviderFailure(provider: ProviderConfig, endpoint: string, error: unknown): void {
@@ -401,6 +480,7 @@ export class ChatService {
     memberId: Types.ObjectId | null,
     propertyId: Types.ObjectId | null,
     language: SupportedLanguage,
+    userMessage: string,
   ): Promise<AssistantContext> {
     const recentMessages = await this.chatMessageModel
       .find({ threadId })
@@ -414,15 +494,60 @@ export class ChatService {
       content: String(message.content || ''),
     }));
 
+    const needsCatalogueContext =
+      this.isCatalogueRecommendationRequest(userMessage) ||
+      /(villa|dacha|hotel|mehmonxona|apartment|kvartira|resort|sanator|toshkent|tashkent|samarqand|samarkand|buxoro|bukhara|xiva|khiva|chorvoq|charvak|zomin|zaamin|chimyon|chimgan|jeju|seoul|busan)/i.test(userMessage);
+    const catalog = needsCatalogueContext
+      ? await this.propertyService.getAssistantCatalogSnapshot(userMessage, 8)
+      : { totalActive: 0, matchedTotal: 0, items: [] };
+    const catalogSummary = catalog.items.length
+      ? [
+          `ROOMi has ${catalog.totalActive} active listings; ${catalog.matchedTotal} match the explicit filters detected in this question.`,
+          ...catalog.items.map((property: any, index: number) => [
+            `LISTING ${index + 1}`,
+            `Exact title: ${property.propertyTitle}`,
+            `Exact type: ${property.propertyType}`,
+            `Exact location: ${property.propertyLocation}`,
+            `Base nightly price: ${this.formatMoney(Number(property.propertyPrice ?? 0))}`,
+            `Maximum guest capacity: ${property.maxGuests ?? property.propertyBeds ?? 1} people`,
+            `Bedrooms: ${property.bedrooms ?? property.propertyRooms ?? 1}`,
+            `Beds: ${property.beds ?? property.propertyBeds ?? 1}`,
+            `Bathrooms: ${property.bathrooms ?? 1}`,
+            `Amenities: ${(property.propertyAmenities ?? []).join(', ') || 'not listed'}`,
+            `Pets allowed: ${property.petsAllowed ? 'yes' : 'no'}`,
+            `Exact details path: /properties/${property._id}`,
+          ].join('\n')),
+        ].join('\n')
+      : needsCatalogueContext
+        ? `ROOMi has ${catalog.totalActive} active listings, but none match the explicit filters detected in this question.`
+        : 'No catalogue lookup was requested. Do not mention or recommend individual listings.';
+
     let propertySummary: string | undefined;
     let availabilitySummary: string | undefined;
 
     if (propertyId) {
       const property = await this.propertyService.getPropertyForPricing(propertyId);
       propertySummary = [
+        `id=${property._id}`,
         `title=${property.propertyTitle ?? 'unknown'}`,
         `type=${property.propertyType ?? 'unknown'}`,
+        `location=${property.propertyLocation ?? 'unknown'}`,
+        `address=${property.propertyAddress ?? 'unknown'}`,
         `basePrice=${property.propertyPrice ?? 0}`,
+        `currency=${property.currency ?? 'UZS'}`,
+        `maxGuests=${property.maxGuests ?? property.propertyBeds ?? 1}`,
+        `bedrooms=${property.bedrooms ?? property.propertyRooms ?? 1}`,
+        `beds=${property.beds ?? property.propertyBeds ?? 1}`,
+        `bathrooms=${property.bathrooms ?? 1}`,
+        `amenities=${(property.propertyAmenities ?? []).join('|') || 'not listed'}`,
+        `petsAllowed=${property.petsAllowed === true}`,
+        `infantsAllowed=${property.infantsAllowed !== false}`,
+        `bookingMode=${property.bookingMode ?? 'INSTANT'}`,
+        `cancellationPolicy=${property.cancellationPolicy ?? 'MODERATE'}`,
+        `checkIn=${property.checkInTime ?? '14:00'}`,
+        `checkOut=${property.checkOutTime ?? '11:00'}`,
+        `minNights=${property.minNights ?? 1}`,
+        `maxNights=${property.maxNights ?? 30}`,
         `rating=${property.propertyRank ?? 0}`,
         `views=${property.propertyViews ?? 0}`,
         `likes=${property.propertyLikes ?? 0}`,
@@ -437,15 +562,34 @@ export class ChatService {
       availabilitySummary = this.renderPricePreviewSummary(preview);
     }
 
+    const platformSummary = [
+      'ROOMi is a stay-booking marketplace.',
+      'Guests can browse ACTIVE properties, save favorites, view property details, create bookings, and manage their bookings.',
+      'Public pages: /properties and /properties/:id. Account pages: /sign-in, /sign-up, and /my-page.',
+      'Signup roles: USER for guests and AGENT for hosts.',
+      'Agents can create and edit listings, manage bookable units, view reservations, and view earnings under /agent.',
+      'A newly created listing is PENDING_REVIEW. It is NOT public immediately. It becomes visible to everyone only after admin approval changes it to ACTIVE.',
+      'A materially edited ACTIVE or SUSPENDED listing returns to PENDING_REVIEW for another review.',
+      'Supported listing types: VILLA, HOTEL, APARTMENT, RESORT, and SANATORIUM.',
+      'Prices use UZS. Dynamic nightly pricing, date availability, stay length, capacity, fees, and unit inventory may change the final quote.',
+    ].join('\n');
+
     const policySummary = [
       'Answers should be concise, practical, and focused on ROOMi booking support.',
       'Explain weekend pricing in terms of nightly price, not a booking-wide markup.',
-      'If a direct answer is not available, ask for property, date, or booking details.',
+      'For catalogue questions, mention only property names and facts present in the live catalogue context.',
+      'Do not claim a property is available for specific dates unless an availability preview for those dates is supplied.',
+      'Base price is not a guaranteed final total. Ask for property, dates, guest count, and unit when an exact quote is needed.',
+      'If a direct answer is not available in the supplied ROOMi context, clearly say so and ask for the missing property, date, booking, or account detail.',
       'Never expose raw database internals or mention hidden implementation details.',
     ].join(' ');
 
     return {
       language,
+      platformSummary,
+      catalogSummary,
+      catalogMatchedTotal: catalog.matchedTotal,
+      catalogItems: catalog.items,
       propertySummary,
       availabilitySummary,
       policySummary,
@@ -457,7 +601,12 @@ export class ChatService {
     const languageInstructions = {
       en: 'Respond in English.',
       ko: '한국어로 답변하세요.',
-      uz: 'Javobni o‘zbek tilida bering.',
+      uz: [
+        'Javobni tabiiy, ravon va adabiy o‘zbek tilida, lotin yozuvida bering.',
+        'Mavjud bo‘lmagan so‘zlarni yasamang.',
+        'ROOMi terminlari: property — turar joy, booking — bron, user — foydalanuvchi, agent — mezbon.',
+        'ACTIVE, PENDING_REVIEW va URL yo‘llari kabi texnik nomlarni tarjima qilmay yozing.',
+      ].join(' '),
     }[context.language];
 
     const sections = [
@@ -468,9 +617,17 @@ export class ChatService {
       'Use the supplied context only to answer in normal conversational language.',
       context.policySummary,
       languageInstructions,
+      `Verified ROOMi platform facts: ${context.platformSummary}`,
+      `Live ROOMi catalogue context:\n${context.catalogSummary}`,
       context.propertySummary ? `Property context: ${context.propertySummary}` : 'Property context: none',
       context.availabilitySummary ? `Availability context: ${context.availabilitySummary}` : 'Availability context: unavailable',
-      'Use only the supplied context, and be honest when information is missing.',
+      'Use only the supplied ROOMi context for project-specific claims. Never invent a listing, price, feature, policy, route, discount, or availability.',
+      'Answer the exact question first. Do not mention or recommend listings unless the user explicitly asks to find, compare, or recommend properties.',
+      'For role, signup, approval, dashboard, or workflow questions, use only the verified platform facts and ignore catalogue listings.',
+      'When recommending listings, give at most three options and include the exact listing title, base nightly price, maximum guest capacity, and details path from the catalogue context.',
+      'Maximum guest capacity is the number explicitly labeled "Maximum guest capacity". Never use bedrooms, beds, booking mode, cancellation policy, or another value as capacity.',
+      'If fewer listings match than the user requested, return only the available matches and clearly say how many matching listings were found. Never fill the gap with invented listings.',
+      'Be honest when information is missing. General travel advice is allowed, but clearly separate it from verified ROOMi facts.',
     ];
 
     return sections.join('\n');
@@ -482,10 +639,119 @@ export class ChatService {
     userMessage: string,
     structured: StructuredBookingRequest,
   ): "pricing" | "availability" | null {
-    if (intent === "pricing" || intent === "availability") return intent;
+    const asksForCatalogueRecommendation = this.isCatalogueRecommendationRequest(userMessage);
+
+    // Guest counts are also common in catalogue searches (for example,
+    // "recommend a villa for 4 people"). Without a selected property, those
+    // questions must reach the grounded model instead of the exact-quote flow.
+    if (!context.propertySummary && asksForCatalogueRecommendation) return null;
+    if (context.propertySummary && (intent === "pricing" || intent === "availability")) return intent;
     if (structured.dateText || structured.guestText) return "pricing";
     if (this.isBookingContinuation(context, userMessage)) return "pricing";
     return null;
+  }
+
+  private isCatalogueRecommendationRequest(userMessage: string): boolean {
+    return /(tavsiya|recommend|variant|mos joy|qaysi|topib ber|toping|izla|search|find|listing)/i.test(userMessage);
+  }
+
+  private buildGroundedCatalogReply(context: AssistantContext, userMessage: string): string | null {
+    if (context.propertySummary || !this.isCatalogueRecommendationRequest(userMessage)) return null;
+
+    if (!context.catalogItems.length) {
+      if (context.language === 'ko') return '현재 요청 조건과 일치하는 ROOMi 숙소를 찾지 못했습니다. 위치, 숙소 유형 또는 인원수를 바꿔 주세요.';
+      if (context.language === 'uz') return 'Hozir so‘rovingizdagi shartlarga mos ROOMi property topilmadi. Joylashuv, property turi yoki mehmonlar sonini o‘zgartirib ko‘ring.';
+      return 'I could not find an active ROOMi property matching those filters. Try changing the location, property type, or guest count.';
+    }
+
+    const selected = context.catalogItems.slice(0, 3);
+    const rows = selected.map((property: any, index: number) => {
+      const title = String(property.propertyTitle || 'ROOMi property');
+      const location = String(property.propertyLocation || '');
+      const type = String(property.propertyType || '');
+      const capacity = Number(property.maxGuests ?? property.propertyBeds ?? 1);
+      const price = this.formatMoney(Number(property.propertyPrice ?? 0));
+      const path = `/properties/${property._id}`;
+
+      if (context.language === 'ko') {
+        return `${index + 1}. ${title} — ${location}, ${type}; 기준 1박 요금 ${price}; 최대 ${capacity}명; ${path}`;
+      }
+      if (context.language === 'uz') {
+        return `${index + 1}. ${title} — ${location}, ${type}; bazaviy bir kecha ${price}; sig‘imi ${capacity} kishi; ${path}`;
+      }
+      return `${index + 1}. ${title} — ${location}, ${type}; base nightly price ${price}; capacity ${capacity} guests; ${path}`;
+    });
+
+    const count = context.catalogMatchedTotal;
+    if (context.language === 'ko') {
+      return `요청 조건과 일치하는 활성 숙소는 ${count}개입니다. 그중 최대 3개를 안내합니다:\n\n${rows.join('\n')}`;
+    }
+    if (context.language === 'uz') {
+      return `So‘rovingiz shartlariga mos ${count} ta ACTIVE property topildi. Ko‘pi bilan 3 tasini ko‘rsataman:\n\n${rows.join('\n')}`;
+    }
+    return `${count} ACTIVE ROOMi properties match your filters. Here are up to three:\n\n${rows.join('\n')}`;
+  }
+
+  private buildGroundedPlatformReply(language: SupportedLanguage, userMessage: string): string | null {
+    const asksAboutRoomi = /\broomi\b/i.test(userMessage) &&
+      /(nima|qanday platform|haqida|what is|about|무엇|어떤 서비스)/i.test(userMessage);
+    const asksAboutUser = /(oddiy user|foydalanuvchi|guest|user|게스트|사용자)/i.test(userMessage) &&
+      /(nima|qila|vazifa|imkon|manage|can|what|무엇|할 수)/i.test(userMessage);
+    const asksAboutAgent = /\bagent\b/i.test(userMessage) &&
+      /(nima|qila|vazifa|imkon|manage|can|what|에이전트)/i.test(userMessage);
+    const asksAboutPublishing = /(property|listing|e['’]?lon|숙소)/i.test(userMessage) &&
+      /(darhol|ko['’]?rin|public|hammaga|review|approve|tasdiq|즉시|공개)/i.test(userMessage);
+
+    if (!asksAboutRoomi && !asksAboutUser && !asksAboutAgent && !asksAboutPublishing) return null;
+
+    if (language === 'ko') {
+      const parts: string[] = [];
+      if (asksAboutRoomi) {
+        parts.push('ROOMi는 숙소를 검색하고 예약할 수 있는 숙박 마켓플레이스입니다.');
+      }
+      if (asksAboutUser) {
+        parts.push('일반 사용자는 ACTIVE 숙소를 둘러보고, 즐겨찾기에 저장하고, 상세 정보를 확인하며, 예약을 생성하고 자신의 예약을 관리할 수 있습니다.');
+      }
+      if (asksAboutAgent) {
+        parts.push('ROOMi 에이전트는 /agent에서 숙소를 생성·수정하고, 예약 가능한 객실/유닛을 관리하며, 예약과 수익을 확인할 수 있습니다.');
+      }
+      if (asksAboutPublishing) {
+        parts.push('새 숙소는 즉시 공개되지 않습니다. 먼저 PENDING_REVIEW 상태로 생성되고, 관리자가 승인해 ACTIVE로 변경한 뒤에만 모든 사용자에게 보입니다. ACTIVE 또는 SUSPENDED 숙소를 중요하게 수정해도 다시 PENDING_REVIEW로 돌아갑니다.');
+      }
+      return parts.join(' ');
+    }
+
+    if (language === 'uz') {
+      const parts: string[] = [];
+      if (asksAboutRoomi) {
+        parts.push('ROOMi — turar joylarni topish va bron qilish uchun marketplace.');
+      }
+      if (asksAboutUser) {
+        parts.push('Oddiy foydalanuvchi ACTIVE turar joylarni ko‘rishi, yoqtirganlarini saqlashi, batafsil ma’lumotlarni ochishi, bron yaratishi va o‘z bronlarini boshqarishi mumkin.');
+      }
+      if (asksAboutAgent) {
+        parts.push('ROOMi agenti /agent bo‘limida property yaratishi va tahrirlashi, bron qilinadigan xona yoki unitlarni boshqarishi, rezervatsiyalarni ko‘rishi hamda daromadlarini kuzatishi mumkin.');
+      }
+      if (asksAboutPublishing) {
+        parts.push('Yangi property darhol hammaga ko‘rinmaydi: u avval PENDING_REVIEW holatida yaratiladi. Admin tasdiqlab ACTIVE holatiga o‘tkazgandan keyingina public ro‘yxatda ko‘rinadi. ACTIVE yoki SUSPENDED property muhim tahrir qilinsa, u yana PENDING_REVIEW holatiga qaytadi.');
+      }
+      return parts.join(' ');
+    }
+
+    const parts: string[] = [];
+    if (asksAboutRoomi) {
+      parts.push('ROOMi is a marketplace for finding and booking stays.');
+    }
+    if (asksAboutUser) {
+      parts.push('A regular user can browse ACTIVE properties, save favorites, view property details, create bookings, and manage their bookings.');
+    }
+    if (asksAboutAgent) {
+      parts.push('A ROOMi agent can create and edit properties, manage bookable rooms or units, review reservations, and track earnings under /agent.');
+    }
+    if (asksAboutPublishing) {
+      parts.push('A new property is not public immediately. It starts as PENDING_REVIEW and appears publicly only after an admin approves it as ACTIVE. Material edits to an ACTIVE or SUSPENDED property send it back to PENDING_REVIEW.');
+    }
+    return parts.join(' ');
   }
 
   private isBookingContinuation(context: AssistantContext, currentUserMessage: string): boolean {

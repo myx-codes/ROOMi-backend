@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Cron } from '@nestjs/schedule';
 import { Model } from 'mongoose';
+import { AvailabilityStatus } from '../../../../roomi-api/src/libs/enums/availability.enum';
 import { BookingStatus } from '../../../../roomi-api/src/libs/enums/booking.enum';
 import {
   BATCH_TIMEZONE,
@@ -16,6 +17,8 @@ export class BookingLifecycleJob {
 
   constructor(
     @InjectModel('Booking') private readonly bookingModel: Model<any>,
+    @InjectModel('Availability') private readonly availabilityModel: Model<any>,
+    @InjectModel('UnitAvailability') private readonly unitAvailabilityModel: Model<any>,
     private readonly batchRunnerService: BatchRunnerService,
   ) {}
 
@@ -29,7 +32,8 @@ export class BookingLifecycleJob {
           bookingEnd: { $lt: now },
         };
 
-        const candidateCount = await this.bookingModel.countDocuments(search).exec();
+        const candidates = await this.bookingModel.find(search).select('_id').lean().exec();
+        const candidateCount = candidates.length;
         if (candidateCount === 0) return 0;
         if (dryRun) {
           this.logger.log(
@@ -38,13 +42,21 @@ export class BookingLifecycleJob {
           return candidateCount;
         }
 
+        const bookingIds = candidates.map((item) => item._id);
         const result = await this.bookingModel
           .updateMany(search, {
             $set: {
-              bookingStatus: BookingStatus.FINISHED,
+              bookingStatus: BookingStatus.COMPLETED,
             },
           })
           .exec();
+
+        if (bookingIds.length) {
+          await this.unitAvailabilityModel.deleteMany({
+            bookingId: { $in: bookingIds },
+            availabilityStatus: AvailabilityStatus.RESERVED,
+          }).exec();
+        }
 
         return result.modifiedCount;
       },
@@ -63,8 +75,12 @@ export class BookingLifecycleJob {
       async ({ now, dryRun }) => {
         const cutoff = new Date(now.getTime() - DEFAULT_WAITING_BOOKING_TTL_HOURS * 60 * 60 * 1000);
         const search = {
-          bookingStatus: BookingStatus.WAITING,
-          createdAt: { $lte: cutoff },
+          bookingStatus: { $in: [BookingStatus.REQUESTED, BookingStatus.AWAITING_PAYMENT, BookingStatus.WAITING] },
+          $or: [
+            { expiresAt: { $lte: now } },
+            { expiresAt: { $exists: false }, createdAt: { $lte: cutoff } },
+            { expiresAt: null, createdAt: { $lte: cutoff } },
+          ],
         };
 
         const candidateCount = await this.bookingModel.countDocuments(search).exec();
@@ -76,13 +92,27 @@ export class BookingLifecycleJob {
           return candidateCount;
         }
 
+        const candidates = await this.bookingModel.find(search).select('_id').lean().exec();
+        const bookingIds = candidates.map((item) => item._id);
+
         const result = await this.bookingModel
           .updateMany(search, {
             $set: {
-              bookingStatus: BookingStatus.CANCELLED,
+              bookingStatus: BookingStatus.EXPIRED,
             },
           })
           .exec();
+
+        if (bookingIds.length) {
+          await this.availabilityModel.deleteMany({
+            bookingId: { $in: bookingIds },
+            availabilityStatus: AvailabilityStatus.HELD,
+          }).exec();
+          await this.unitAvailabilityModel.deleteMany({
+            bookingId: { $in: bookingIds },
+            availabilityStatus: AvailabilityStatus.HELD,
+          }).exec();
+        }
 
         return result.modifiedCount;
       },

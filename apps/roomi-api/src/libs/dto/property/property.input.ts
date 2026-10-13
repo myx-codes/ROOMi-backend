@@ -1,6 +1,6 @@
 import { InputType, Field, Int } from "@nestjs/graphql";
-import { IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Length, Min } from "class-validator"
-import { PropertyLocation, PropertyStatus, PropertyType } from "../../enums/property.enum";
+import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Length, Matches, Min } from "class-validator"
+import { BookingMode, CancellationPolicy, PropertyLocation, PropertyStatus, PropertyType } from "../../enums/property.enum";
 import type { Types } from "mongoose";
 import { Direction } from "../../enums/common.enum";
 import { availableOptions, availablePropertySorts } from "../../config";
@@ -34,6 +34,14 @@ export class PropertyInput {
     propertyPrice: number;
 
     @IsOptional()
+    @Field(() => BookingMode, { nullable: true })
+    bookingMode?: BookingMode;
+
+    @IsOptional()
+    @Field(() => String, { nullable: true })
+    currency?: string;
+
+    @IsOptional()
     @Field(() => Boolean, { nullable: true })
     dynamicPricingEnabled?: boolean;
 
@@ -63,6 +71,40 @@ export class PropertyInput {
     @Field(() => Int)
     propertyBeds: number;
 
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    maxGuests?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    bedrooms?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    beds?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    bathrooms?: number;
+
+    @IsOptional()
+    @IsBoolean()
+    @Field(() => Boolean, { nullable: true })
+    infantsAllowed?: boolean;
+
+    @IsOptional()
+    @IsBoolean()
+    @Field(() => Boolean, { nullable: true })
+    petsAllowed?: boolean;
+
     @IsNotEmpty()
     @IsInt()
     @Min(1)
@@ -83,6 +125,81 @@ export class PropertyInput {
     @IsOptional()
     @Field(() => Boolean, {nullable: true})
     propertyRent?: boolean;
+
+    @IsOptional()
+    @IsString({ each: true })
+    @Field(() => [String], { nullable: true })
+    propertyAmenities?: string[];
+
+    @IsOptional()
+    @Field(() => Number, { nullable: true })
+    latitude?: number;
+
+    @IsOptional()
+    @Field(() => Number, { nullable: true })
+    longitude?: number;
+
+    @IsOptional()
+    @Field(() => String, { nullable: true })
+    timezone?: string;
+
+    @IsOptional()
+    @Matches(/^\d{2}:\d{2}$/)
+    @Field(() => String, { nullable: true })
+    checkInTime?: string;
+
+    @IsOptional()
+    @Matches(/^\d{2}:\d{2}$/)
+    @Field(() => String, { nullable: true })
+    checkOutTime?: string;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    minNights?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    maxNights?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    advanceNoticeHours?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    preparationTimeHours?: number;
+
+    @IsOptional()
+    @IsString({ each: true })
+    @Field(() => [String], { nullable: true })
+    houseRules?: string[];
+
+    @IsOptional()
+    @Field(() => CancellationPolicy, { nullable: true })
+    cancellationPolicy?: CancellationPolicy;
+
+    @IsOptional()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    cleaningFee?: number;
+
+    @IsOptional()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    petFee?: number;
+
+    @IsOptional()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    extraGuestFee?: number;
 
     memberId?: Types.ObjectId;
 
@@ -162,6 +279,31 @@ class PISearch {
     @IsOptional()
     @Field(() => String, { nullable: true })
     text?: string;
+
+    @IsOptional()
+    @Matches(/^\d{4}-\d{2}-\d{2}$/)
+    @Field(() => String, { nullable: true })
+    checkIn?: string;
+
+    @IsOptional()
+    @Matches(/^\d{4}-\d{2}-\d{2}$/)
+    @Field(() => String, { nullable: true })
+    checkOut?: string;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    guests?: number;
+
+    @IsOptional()
+    @Field(() => BookingMode, { nullable: true })
+    bookingMode?: BookingMode;
+
+    @IsOptional()
+    @IsString({ each: true })
+    @Field(() => [String], { nullable: true })
+    amenities?: string[];
 }
 
     

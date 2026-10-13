@@ -72,4 +72,46 @@ export class PricePreview {
 
     @Field(() => Number)
     averagePrice: number;
+
+    @Field(() => Number, { nullable: true })
+    quantity?: number;
+
+    @Field(() => Number, { nullable: true })
+    billableGuests?: number;
+
+    @Field(() => ID, { nullable: true })
+    unitId?: string | null;
+
+    @Field(() => String, { nullable: true })
+    unitName?: string | null;
+
+    @Field(() => String, { nullable: true })
+    unitType?: string | null;
+
+    @Field(() => String, { nullable: true })
+    rateModel?: string | null;
+
+    @Field(() => String, { nullable: true })
+    currency?: string;
+
+    @Field(() => Number, { nullable: true })
+    nightlyTotal?: number;
+
+    @Field(() => Number, { nullable: true })
+    cleaningFee?: number;
+
+    @Field(() => Number, { nullable: true })
+    petFee?: number;
+
+    @Field(() => Number, { nullable: true })
+    extraGuestFee?: number;
+
+    @Field(() => Number, { nullable: true })
+    guestTotal?: number;
+
+    @Field(() => Number, { nullable: true })
+    hostCommissionAmount?: number;
+
+    @Field(() => Number, { nullable: true })
+    hostPayoutAmount?: number;
 }

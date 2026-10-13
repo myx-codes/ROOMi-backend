@@ -25,7 +25,8 @@ export class NoticeResolver {
     @Mutation(() => Notice)
     public async updateNotificationStatus(
         @Args('notificationId') notificationId: string,
+        @AuthMember('_id') memberId: Types.ObjectId,
     ): Promise<Notice> {
-        return await this.noticeService.markAsRead(new Types.ObjectId(notificationId));
+        return await this.noticeService.markAsRead(memberId, new Types.ObjectId(notificationId));
     }
 }

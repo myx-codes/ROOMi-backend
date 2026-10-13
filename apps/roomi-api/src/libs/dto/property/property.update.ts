@@ -1,6 +1,6 @@
 import { Field, InputType, Int, ID, Float } from '@nestjs/graphql';
-import { IsInt, IsNotEmpty, IsOptional, Length, Min, IsArray, IsBoolean } from 'class-validator';
-import { PropertyLocation, PropertyStatus, PropertyType } from '../../enums/property.enum';
+import { IsInt, IsNotEmpty, IsOptional, Length, Min, IsArray, IsBoolean, IsString, Matches } from 'class-validator';
+import { BookingMode, CancellationPolicy, PropertyLocation, PropertyStatus, PropertyType } from '../../enums/property.enum';
 import { Types } from 'mongoose';
 
 @InputType()
@@ -37,6 +37,14 @@ export class PropertyUpdate {
     propertyPrice?: number;
 
     @IsOptional()
+    @Field(() => BookingMode, { nullable: true })
+    bookingMode?: BookingMode;
+
+    @IsOptional()
+    @Field(() => String, { nullable: true })
+    currency?: string;
+
+    @IsOptional()
     @Field(() => Boolean, { nullable: true })
     dynamicPricingEnabled?: boolean;
 
@@ -71,12 +79,52 @@ export class PropertyUpdate {
     @IsInt()
     @Min(1)
     @Field(() => Int, { nullable: true })
+    maxGuests?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    bedrooms?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    beds?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    bathrooms?: number;
+
+    @IsOptional()
+    @IsBoolean()
+    @Field(() => Boolean, { nullable: true })
+    infantsAllowed?: boolean;
+
+    @IsOptional()
+    @IsBoolean()
+    @Field(() => Boolean, { nullable: true })
+    petsAllowed?: boolean;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
     propertyRooms?: number;
 
     @IsOptional()
     @IsArray()
     @Field(() => [String], { nullable: true })
     propertyImages?: string[];
+
+    @IsOptional()
+    @IsArray()
+    @IsString({ each: true })
+    @Field(() => [String], { nullable: true })
+    propertyAmenities?: string[];
 
     @IsOptional()
     @Length(5, 500)
@@ -87,6 +135,69 @@ export class PropertyUpdate {
     @IsBoolean()
     @Field(() => Boolean, { nullable: true })
     propertyRent?: boolean; // Bo'sh yoki Band ekanligini yangilash uchun
+
+    @IsOptional()
+    @Field(() => String, { nullable: true })
+    timezone?: string;
+
+    @IsOptional()
+    @Matches(/^\d{2}:\d{2}$/)
+    @Field(() => String, { nullable: true })
+    checkInTime?: string;
+
+    @IsOptional()
+    @Matches(/^\d{2}:\d{2}$/)
+    @Field(() => String, { nullable: true })
+    checkOutTime?: string;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    minNights?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(1)
+    @Field(() => Int, { nullable: true })
+    maxNights?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    advanceNoticeHours?: number;
+
+    @IsOptional()
+    @IsInt()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    preparationTimeHours?: number;
+
+    @IsOptional()
+    @IsArray()
+    @IsString({ each: true })
+    @Field(() => [String], { nullable: true })
+    houseRules?: string[];
+
+    @IsOptional()
+    @Field(() => CancellationPolicy, { nullable: true })
+    cancellationPolicy?: CancellationPolicy;
+
+    @IsOptional()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    cleaningFee?: number;
+
+    @IsOptional()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    petFee?: number;
+
+    @IsOptional()
+    @Min(0)
+    @Field(() => Int, { nullable: true })
+    extraGuestFee?: number;
 
     // soldAt olib tashlandi (ijarada shart emas)
     

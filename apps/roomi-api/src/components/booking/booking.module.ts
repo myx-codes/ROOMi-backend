@@ -7,6 +7,7 @@ import { AuthModule } from '../auth/auth.module';
 import { PropertyModule } from '../property/property.module';
 import { AvailabilityModule } from '../availability/availability.module';
 import { NoticeModule } from '../notifaction/notice.module';
+import { BookableUnitModule } from '../bookable-unit/bookable-unit.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { NoticeModule } from '../notifaction/notice.module';
     PropertyModule,
     AvailabilityModule,
     NoticeModule,
+    BookableUnitModule,
   ],
   providers: [BookingResolver, BookingService],
   exports: [BookingService],

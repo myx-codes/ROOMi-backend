@@ -30,9 +30,13 @@ export class NoticeService {
     }
 
     // 3. Bildirishnomani o'qildi deb belgilash
-    public async markAsRead(notificationId: Types.ObjectId): Promise<Notice> {
+    public async markAsRead(memberId: Types.ObjectId, notificationId: Types.ObjectId): Promise<Notice> {
         const result = await this.noticeModel
-            .findByIdAndUpdate(notificationId, { status: NoticeStatus.READ }, { returnDocument: 'after' })
+            .findOneAndUpdate(
+                { _id: notificationId, receiverId: memberId, status: { $ne: NoticeStatus.DELETE } },
+                { status: NoticeStatus.READ },
+                { returnDocument: 'after' },
+            )
             .exec();
         
         if (!result) throw new InternalServerErrorException("Bildirishnoma topilmadi!");

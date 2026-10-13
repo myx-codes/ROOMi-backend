@@ -16,21 +16,25 @@ export class LoggingInterceptor implements NestInterceptor {
         } else if (requestType === 'graphql') {
             /* (1) Print Request */
             const gqlContext = GqlExecutionContext.create(context);
-            this.logger.log(`${this.stringify(gqlContext.getContext().req.body)}`, 'REQUEST');
+            const requestBody = gqlContext.getContext().req.body;
+            this.logger.log(this.describeGraphqlOperation(requestBody), 'REQUEST');
 
             /* (2) Errors handing via GraphQL */
             /* (3) No Errors, giving Response below */
             return next.handle().pipe(
-                tap((context) => {
+                tap(() => {
                     const responseTime = Date.now() - recordTime;
-                    this.logger.log(`${this.stringify(context)} - ${responseTime}ms \n\n`, 'RESPONSE');
+                    this.logger.log(`completed - ${responseTime}ms`, 'RESPONSE');
                 }),
                 
             );
         } return next.handle().pipe();
     }
 
-    private stringify(context: ExecutionContext): string {
-        return JSON.stringify(context).slice(0, 75);
+    private describeGraphqlOperation(body: any): string {
+        const operationName = body?.operationName ?? 'anonymous';
+        const query = typeof body?.query === 'string' ? body.query.replace(/\s+/g, ' ').trim() : '';
+        const operationType = query.startsWith('mutation') ? 'mutation' : query.startsWith('query') ? 'query' : 'graphql';
+        return `${operationType}:${operationName}`;
     }
 }

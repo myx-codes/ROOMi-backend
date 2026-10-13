@@ -6,12 +6,14 @@ import { AgentPropertiesInquiry, AllPropertiesInquiry, OrdinaryInquiry, Properti
 import { Direction, Message } from '../../libs/enums/common.enum';
 import { MemberService } from '../member/member.service';
 import { StatisticModify, T } from '../../libs/types/common';
-import { PropertyStatus } from '../../libs/enums/property.enum';
+import { BookingMode } from '../../libs/enums/booking.enum';
+import { AvailabilityStatus } from '../../libs/enums/availability.enum';
+import { CancellationPolicy, PropertyStatus } from '../../libs/enums/property.enum';
 import { ViewGroup } from '../../libs/enums/view.enum';
 import { ViewService } from '../view/view.service';
 import { PropertyUpdate } from '../../libs/dto/property/property.update';
 import moment from 'moment';
-import { lookupAuthMemberLiked, lookupMember, shapeIntoMongoObjectId } from '../../libs/config';
+import { lookupAuthMemberLiked, lookupMember, parseDateOnly, shapeIntoMongoObjectId } from '../../libs/config';
 import { LikeGroup } from '../../libs/enums/like.enum';
 import { LikeService } from '../like/like.service';
 
@@ -20,6 +22,7 @@ export class PropertyService {
 
     constructor(
         @InjectModel("Property") private readonly propertyModel: Model<Property>,
+        @InjectModel('Availability') private readonly availabilityModel: Model<any>,
         private readonly memberService: MemberService,
         private readonly viewService: ViewService,
         private readonly likeService: LikeService,
@@ -27,7 +30,8 @@ export class PropertyService {
 
     public async createProperty(input: PropertyInput): Promise<Property> {
         try {
-            const result = await this.propertyModel.create(input);
+            const createInput = this.preparePropertyCreateInput(input);
+            const result = await this.propertyModel.create(createInput);
             
             // increase memberProperties
             await this.memberService.memberStatsEditor({
@@ -42,6 +46,44 @@ export class PropertyService {
             throw new BadRequestException(Message.CREATE_FAILED);
         }
     };
+
+    private preparePropertyCreateInput(input: PropertyInput): T {
+        const createInput: T = {
+            ...input,
+            propertyStatus: PropertyStatus.PENDING_REVIEW,
+            bookingMode: input.bookingMode ?? BookingMode.INSTANT,
+            currency: input.currency ?? 'UZS',
+            maxGuests: input.maxGuests ?? input.propertyBeds ?? 1,
+            bedrooms: input.bedrooms ?? input.propertyRooms ?? 1,
+            beds: input.beds ?? input.propertyBeds ?? 1,
+            bathrooms: input.bathrooms ?? 1,
+            infantsAllowed: input.infantsAllowed ?? true,
+            petsAllowed: input.petsAllowed ?? false,
+            timezone: input.timezone ?? 'Asia/Tashkent',
+            checkInTime: input.checkInTime ?? '14:00',
+            checkOutTime: input.checkOutTime ?? '11:00',
+            minNights: input.minNights ?? 1,
+            maxNights: input.maxNights ?? 30,
+            advanceNoticeHours: input.advanceNoticeHours ?? 0,
+            preparationTimeHours: input.preparationTimeHours ?? 0,
+            houseRules: input.houseRules ?? [],
+            cancellationPolicy: input.cancellationPolicy ?? CancellationPolicy.MODERATE,
+            cleaningFee: input.cleaningFee ?? 0,
+            petFee: input.petFee ?? 0,
+            extraGuestFee: input.extraGuestFee ?? 0,
+        };
+
+        if (typeof input.latitude === 'number' || typeof input.longitude === 'number') {
+            createInput.propertyCoordinates = {
+                lat: input.latitude,
+                lng: input.longitude,
+            };
+            delete createInput.latitude;
+            delete createInput.longitude;
+        }
+
+        return createInput;
+    }
 
     public async getProperty(memberId: Types.ObjectId, propertyId: Types.ObjectId): Promise<Property> {
         const search: T = {
@@ -86,7 +128,7 @@ export class PropertyService {
         const doc = await this.propertyModel
             .findById(propertyId)
             .select(
-                'propertyTitle propertyPrice propertyType propertyRank propertyLikes propertyViews propertyComments propertyRatingCount dynamicPricingEnabled weekendMultiplier minMultiplier maxMultiplier manualMultiplierOverride propertyStatus',
+                'propertyTitle propertyPrice propertyType propertyLocation propertyAddress propertyRank propertyLikes propertyViews propertyComments propertyRatingCount dynamicPricingEnabled weekendMultiplier minMultiplier maxMultiplier manualMultiplierOverride propertyStatus currency cleaningFee petFee extraGuestFee cancellationPolicy maxGuests bedrooms beds bathrooms propertyRooms propertyBeds propertyAmenities minNights maxNights bookingMode infantsAllowed petsAllowed timezone checkInTime checkOutTime memberId',
             )
             .lean()
             .exec();
@@ -95,17 +137,148 @@ export class PropertyService {
         return doc;
     }
 
+    /**
+     * Small live catalogue snapshot used as grounding for the ROOMi assistant.
+     * The model only receives ACTIVE properties and never queries MongoDB
+     * directly or invents catalogue records.
+     */
+    public async getAssistantCatalogSnapshot(userMessage: string, limit = 8): Promise<{
+        totalActive: number;
+        matchedTotal: number;
+        items: any[];
+    }> {
+        const properties = await this.propertyModel
+            .find({ propertyStatus: PropertyStatus.ACTIVE })
+            .select(
+                '_id propertyTitle propertyType propertyLocation propertyAddress propertyPrice currency maxGuests bedrooms beds bathrooms propertyRooms propertyBeds propertyAmenities propertyRank propertyRatingCount propertyLikes propertyViews bookingMode cancellationPolicy checkInTime checkOutTime minNights maxNights petsAllowed infantsAllowed propertyDesc',
+            )
+            .lean()
+            .exec();
+
+        const normalized = String(userMessage || '').toLocaleLowerCase();
+        const requestedTypes = [
+            { type: 'VILLA', aliases: ['villa', 'dacha', 'dala hovli'] },
+            { type: 'HOTEL', aliases: ['hotel', 'mehmonxona', 'otel'] },
+            { type: 'APARTMENT', aliases: ['apartment', 'kvartira', 'xonadon'] },
+            { type: 'RESORT', aliases: ['resort', 'kurort'] },
+            { type: 'SANATORIUM', aliases: ['sanatorium', 'sanatoriy'] },
+        ]
+            .filter(({ aliases }) => aliases.some((alias) => normalized.includes(alias)))
+            .map(({ type }) => type);
+        const locationAliases: Record<string, string[]> = {
+            TASHKENT: ['tashkent', 'toshkent'],
+            SAMARKAND: ['samarkand', 'samarqand'],
+            BUKHARA: ['bukhara', 'buxoro'],
+            KHIVA: ['khiva', 'xiva'],
+            CHORVOQ: ['chorvoq', 'charvak'],
+            BOSTONLIQ: ["bo'stonliq", 'bostonliq', 'bostanlik'],
+            ZAAMIN: ['zaamin', 'zomin'],
+            CHIMGAN: ['chimgan', 'chimyon'],
+            CHODAK: ['chodak'],
+            SEOUL: ['seoul', 'seul'],
+            BUSAN: ['busan', 'pusan'],
+            INCHEON: ['incheon', 'inchon'],
+            DAEGU: ['daegu'],
+            GYEONGJU: ['gyeongju'],
+            GWANGJU: ['gwangju'],
+            CHONJU: ['chonju', 'jeonju'],
+            DAEJON: ['daejeon', 'daejon'],
+            JEJU: ['jeju'],
+            BALI: ['bali'],
+        };
+        const requestedLocations = Object.entries(locationAliases)
+            .filter(([, aliases]) => aliases.some((alias) => normalized.includes(alias)))
+            .map(([location]) => location);
+        const requestedGuests = Number(
+            normalized.match(/\b(\d{1,2})\s*(?:mehmon|kishi|odam|guest|people|person)\b/i)?.[1] ?? 0,
+        );
+        const requiresPets = /\b(?:pet|pets|uy hayvoni|hayvon bilan)\b/i.test(normalized);
+        const tokens = normalized
+            .replace(/[^\p{L}\p{N}]+/gu, ' ')
+            .split(/\s+/)
+            .filter((token) => token.length >= 4);
+
+        const candidates = (properties as any[])
+            .filter((property) => !requestedTypes.length || requestedTypes.includes(String(property.propertyType)))
+            .filter((property) => !requestedLocations.length || requestedLocations.includes(String(property.propertyLocation)))
+            .filter((property) => !requestedGuests || Number(property.maxGuests ?? property.propertyBeds ?? 1) >= requestedGuests)
+            .filter((property) => !requiresPets || property.petsAllowed === true)
+            .map((property) => {
+                const haystack = [
+                    property.propertyTitle,
+                    property.propertyType,
+                    property.propertyLocation,
+                    property.propertyAddress,
+                    property.propertyDesc,
+                    ...(property.propertyAmenities ?? []),
+                ].join(' ').toLocaleLowerCase();
+                const lexicalScore = tokens.reduce(
+                    (score, token) => score + (haystack.includes(token) ? 1 : 0),
+                    0,
+                );
+                const familyScore = /oilaviy|family|children|bolalar/i.test(normalized)
+                    ? Math.min(Number(property.maxGuests ?? 1), 8) / 8
+                    : 0;
+                return { property, score: lexicalScore + familyScore };
+            })
+            .sort((left, right) =>
+                right.score - left.score ||
+                Number(right.property.propertyRank ?? 0) - Number(left.property.propertyRank ?? 0) ||
+                Number(right.property.propertyLikes ?? 0) - Number(left.property.propertyLikes ?? 0) ||
+                Number(right.property.propertyViews ?? 0) - Number(left.property.propertyViews ?? 0),
+            );
+
+        return {
+            totalActive: properties.length,
+            matchedTotal: candidates.length,
+            items: candidates.slice(0, Math.max(1, Math.min(limit, 12))).map(({ property }) => property),
+        };
+    }
+
+    public async getPropertyForBooking(propertyId: Types.ObjectId): Promise<any> {
+        const doc = await this.propertyModel
+            .findOne({
+                _id: propertyId,
+                propertyStatus: PropertyStatus.ACTIVE,
+            })
+            .select(
+                'propertyTitle propertyPrice propertyStatus memberId bookingMode maxGuests bedrooms beds bathrooms propertyRooms propertyBeds propertyAmenities infantsAllowed petsAllowed minNights maxNights cancellationPolicy currency cleaningFee petFee extraGuestFee timezone advanceNoticeHours',
+            )
+            .lean()
+            .exec();
+
+        if (!doc) throw new InternalServerErrorException(Message.NO_DATA_FOUND);
+        return doc;
+    }
+
+    public async assertPropertyOwner(memberId: Types.ObjectId, propertyId: Types.ObjectId): Promise<Property> {
+        const property = await this.propertyModel
+            .findOne({
+                _id: propertyId,
+                memberId,
+                propertyStatus: { $nin: [PropertyStatus.DELETE, PropertyStatus.ARCHIVED] },
+            })
+            .exec();
+
+        if (!property) throw new BadRequestException(Message.NOT_ALLOWED_REQUEST);
+        return property;
+    }
+
     
     public async updateProperty(memberId: Types.ObjectId, input: PropertyUpdate): Promise<Property> {
         let { propertyStatus, deletedAt } = input;
         const search: T = {
             _id: input._id,
             memberId: memberId,
-            propertyStatus: PropertyStatus.ACTIVE,
+            propertyStatus: { $nin: [PropertyStatus.DELETE, PropertyStatus.ARCHIVED] },
         };
         
       
         if (propertyStatus === PropertyStatus.DELETE) deletedAt = moment().toDate();
+        if (propertyStatus === PropertyStatus.ACTIVE || propertyStatus === PropertyStatus.SUSPENDED) {
+            input.propertyStatus = PropertyStatus.PENDING_REVIEW;
+        }
+        if (deletedAt) input.deletedAt = deletedAt;
         
         const result = await this.propertyModel
         .findOneAndUpdate(search, input, {
@@ -132,7 +305,7 @@ export class PropertyService {
             const sort: T = { [input?.sort ?? 'createdAt']: input?.direction ?? Direction.DESC };
             
             this.shapeMatchQuery(match, input);
-            console.log('match:', match);
+            await this.appendAvailabilityMatch(match, input);
             
             const result = await this.propertyModel
             .aggregate([
@@ -145,7 +318,12 @@ export class PropertyService {
                             { $limit: input.limit },
                             lookupAuthMemberLiked(memberId),
                             lookupMember,
-                            { $unwind: '$memberData' },
+                            {
+                                $unwind: {
+                                    path: '$memberData',
+                                    preserveNullAndEmptyArrays: true,
+                                },
+                            },
                         ],
                         metaCounter: [{ $count: 'total' }],
                     },
@@ -169,6 +347,11 @@ export class PropertyService {
                 squaresRange,
                 options,
                 text,
+                checkIn,
+                checkOut,
+                guests,
+                bookingMode,
+                amenities,
             } = input.search;
             
             if (memberId) match.memberId = shapeIntoMongoObjectId(memberId);
@@ -176,6 +359,9 @@ export class PropertyService {
             if (roomsList) match.propertyRooms = { $in: roomsList };
             if (bedsList) match.propertyBeds = { $in: bedsList };
             if (typeList) match.propertyType = { $in: typeList };
+            if (guests) match.maxGuests = { $gte: guests };
+            if (bookingMode) match.bookingMode = bookingMode;
+            if (amenities?.length) match.propertyAmenities = { $all: amenities };
             
             if (pricesRange) match.propertyPrice = { $gte: pricesRange.start, $lte: pricesRange.end };
             if (periodsRange) match.createdAt = { $gte: periodsRange.start, $lte: periodsRange.end };
@@ -188,6 +374,54 @@ export class PropertyService {
                 });
             }
         };
+
+        private async appendAvailabilityMatch(match: T, input: PropertiesInquiry): Promise<void> {
+            const checkIn = input.search?.checkIn;
+            const checkOut = input.search?.checkOut;
+            if (!checkIn || !checkOut) return;
+
+            const start = parseDateOnly(checkIn);
+            const end = parseDateOnly(checkOut);
+            if (end.getTime() <= start.getTime()) throw new BadRequestException('checkOut must be after checkIn');
+
+            const maxSearchNights = Number(process.env.MAX_SEARCH_NIGHTS ?? 60);
+            const nights = Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+            if (nights > maxSearchNights) {
+                throw new BadRequestException(`Search date range cannot exceed ${maxSearchNights} nights`);
+            }
+
+            const now = new Date();
+            const lockedStatuses = [
+                AvailabilityStatus.RESERVED,
+                AvailabilityStatus.BLOCKED,
+                AvailabilityStatus.OCCUPIED,
+                AvailabilityStatus.MAINTENANCE,
+            ];
+            const lockedDates = await this.availabilityModel
+                .find({
+                    availabilityDate: { $gte: start, $lt: end },
+                    $or: [
+                        { availabilityStatus: { $in: lockedStatuses } },
+                        {
+                            availabilityStatus: AvailabilityStatus.HELD,
+                            heldUntil: { $gt: now },
+                        },
+                    ],
+                })
+                .select('propertyId')
+                .lean()
+                .exec();
+
+            const unavailablePropertyIds = lockedDates
+                .map((item: any) => item.propertyId)
+                .filter(Boolean)
+                .map((propertyId: any) => shapeIntoMongoObjectId(propertyId));
+
+            if (!unavailablePropertyIds.length) return;
+
+            match._id = match._id ?? {};
+            match._id.$nin = [...(match._id.$nin ?? []), ...unavailablePropertyIds];
+        }
         
         
         public async getAgentProperties(memberId: Types.ObjectId, input: AgentPropertiesInquiry): Promise<Properties> {
@@ -264,6 +498,7 @@ export class PropertyService {
             
             
             if (propertyStatus === PropertyStatus.DELETE) deletedAt = moment().toDate();
+            if (deletedAt) input.deletedAt = deletedAt;
             
             const result = await this.propertyModel
             .findOneAndUpdate(search, input, {

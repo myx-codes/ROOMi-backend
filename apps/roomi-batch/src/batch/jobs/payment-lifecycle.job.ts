@@ -26,7 +26,7 @@ export class PaymentLifecycleJob {
       async ({ now, dryRun }) => {
         const cutoff = new Date(now.getTime() - DEFAULT_PENDING_PAYMENT_TTL_HOURS * 60 * 60 * 1000);
         const search = {
-          paymentStatus: PaymentStatus.PENDING,
+          paymentStatus: { $in: [PaymentStatus.CREATED, PaymentStatus.PENDING] },
           createdAt: { $lte: cutoff },
         };
 

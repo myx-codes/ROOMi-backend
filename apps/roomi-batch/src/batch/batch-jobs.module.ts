@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AvailabilitySchema } from '../../../roomi-api/src/schemas/Availability.model';
+import { UnitAvailabilitySchema } from '../../../roomi-api/src/schemas/UnitAvailability.model';
 import { BookingSchema } from '../../../roomi-api/src/schemas/Booking.model';
 import NoticeSchema from '../../../roomi-api/src/schemas/Notification.model';
 import { PaymentSchema } from '../../../roomi-api/src/schemas/Payment.model';
@@ -27,6 +28,7 @@ import { BatchRunnerService } from './services/batch-runner.service';
       { name: 'Payment', schema: PaymentSchema },
       { name: 'Notice', schema: NoticeSchema },
       { name: 'Availability', schema: AvailabilitySchema },
+      { name: 'UnitAvailability', schema: UnitAvailabilitySchema },
       { name: 'Rating', schema: RatingSchema },
       { name: 'Property', schema: PropertySchema },
     ]),

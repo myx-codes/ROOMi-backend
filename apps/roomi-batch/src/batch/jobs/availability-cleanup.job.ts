@@ -28,7 +28,7 @@ export class AvailabilityCleanupJob {
           now.getTime() - DEFAULT_OCCUPIED_AVAILABILITY_RETENTION_DAYS * 24 * 60 * 60 * 1000,
         );
         const search = {
-          availabilityStatus: AvailabilityStatus.OCCUPIED,
+          availabilityStatus: { $in: [AvailabilityStatus.RESERVED, AvailabilityStatus.OCCUPIED] },
           availabilityDate: { $lt: cutoff },
         };
 

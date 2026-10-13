@@ -7,7 +7,7 @@ export class Payment extends Document {
     @Prop({
         type: String,
         enum: PaymentStatus,
-        default: PaymentStatus.PENDING,
+        default: PaymentStatus.CREATED,
     })
     paymentStatus: PaymentStatus;
 
@@ -46,6 +46,32 @@ export class Payment extends Document {
     transactionId?: string;
 
     @Prop({
+        type: String,
+        default: null,
+        index: { unique: true, sparse: true },
+    })
+    providerTransactionId?: string | null;
+
+    @Prop({
+        type: String,
+        default: null,
+        index: { unique: true, sparse: true },
+    })
+    idempotencyKey?: string | null;
+
+    @Prop({
+        type: Boolean,
+        default: false,
+    })
+    legacy?: boolean;
+
+    @Prop({
+        type: Object,
+        default: null,
+    })
+    providerPayload?: Record<string, unknown> | null;
+
+    @Prop({
         type: Date,
         default: null,
     })
@@ -53,3 +79,4 @@ export class Payment extends Document {
 }
 
 export const PaymentSchema = SchemaFactory.createForClass(Payment);
+PaymentSchema.index({ bookingId: 1, paymentMethod: 1, paymentStatus: 1 });

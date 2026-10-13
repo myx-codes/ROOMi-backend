@@ -62,6 +62,9 @@ export class PricingSyncJob {
           const operations = upcomingDates.flatMap((date) => {
             const existing = existingMap.get(date);
             if (
+              existing?.availabilityStatus === AvailabilityStatus.HELD ||
+              existing?.availabilityStatus === AvailabilityStatus.RESERVED ||
+              existing?.availabilityStatus === AvailabilityStatus.BLOCKED ||
               existing?.availabilityStatus === AvailabilityStatus.OCCUPIED ||
               existing?.availabilityStatus === AvailabilityStatus.MAINTENANCE
             ) {
@@ -117,4 +120,3 @@ export class PricingSyncJob {
     );
   }
 }
-

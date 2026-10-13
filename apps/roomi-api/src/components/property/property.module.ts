@@ -8,6 +8,7 @@ import { ViewModule } from '../view/view.module';
 import { MemberModule } from '../member/member.module';
 import { LikeService } from '../like/like.service';
 import { LikeModule } from '../like/like.module';
+import { AvailabilitySchema } from '../../schemas/Availability.model';
 
 @Module({
   imports: [
@@ -15,7 +16,8 @@ import { LikeModule } from '../like/like.module';
         {
         name: "Property", 
         schema: PropertySchema,
-    }
+    },
+    { name: 'Availability', schema: AvailabilitySchema },
   ]),
     AuthModule,
     ViewModule,

@@ -1,6 +1,6 @@
 import { Args, Int, Mutation, Parent, Resolver, Query, ResolveField } from '@nestjs/graphql';
 import { BookingService } from './booking.service';
-import { Booking, Bookings } from '../../libs/dto/booking/booking';
+import { Booking, Bookings, RefundPreview } from '../../libs/dto/booking/booking';
 import { BookingInput, BookingsInquiry } from '../../libs/dto/booking/booking.input';
 import { UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
@@ -31,6 +31,42 @@ export class BookingResolver {
         @AuthMember('_id') memberId: Types.ObjectId,
     ): Promise<Bookings> {
         return await this.bookingService.getMyBookings(memberId, input);
+    }
+
+    @UseGuards(AuthGuard)
+    @Mutation(() => Booking)
+    async acceptBooking(
+        @Args('bookingId') bookingId: string,
+        @AuthMember('_id') memberId: Types.ObjectId,
+    ): Promise<Booking> {
+        return await this.bookingService.acceptBooking(memberId, bookingId);
+    }
+
+    @UseGuards(AuthGuard)
+    @Mutation(() => Booking)
+    async rejectBooking(
+        @Args('bookingId') bookingId: string,
+        @AuthMember('_id') memberId: Types.ObjectId,
+    ): Promise<Booking> {
+        return await this.bookingService.rejectBooking(memberId, bookingId);
+    }
+
+    @UseGuards(AuthGuard)
+    @Mutation(() => Booking)
+    async cancelBooking(
+        @Args('bookingId') bookingId: string,
+        @AuthMember('_id') memberId: Types.ObjectId,
+    ): Promise<Booking> {
+        return await this.bookingService.cancelBooking(memberId, bookingId);
+    }
+
+    @UseGuards(AuthGuard)
+    @Query(() => RefundPreview)
+    async refundPreview(
+        @Args('bookingId') bookingId: string,
+        @AuthMember('_id') memberId: Types.ObjectId,
+    ): Promise<RefundPreview> {
+        return await this.bookingService.refundPreview(memberId, bookingId);
     }
 
     @Roles(MemberType.AGENT)

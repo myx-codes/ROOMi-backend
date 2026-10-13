@@ -5,6 +5,7 @@ import { AvailabilityService } from './availability.service';
 import { AvailabilitySchema } from '../../schemas/Availability.model';
 import { AuthModule } from '../auth/auth.module';
 import { PropertyModule } from '../property/property.module';
+import { BookableUnitModule } from '../bookable-unit/bookable-unit.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { PropertyModule } from '../property/property.module';
     ]),
     AuthModule,
     PropertyModule,
+    BookableUnitModule,
   ],
   providers: [
     AvailabilityResolver, 

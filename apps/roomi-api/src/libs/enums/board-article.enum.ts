@@ -17,6 +17,7 @@ registerEnumType(BoardArticleCategory, {
 export enum BoardArticleStatus {
     ACTIVE = 'ACTIVE',     // Saytda ko'rinadi
     WAITING = 'WAITING',   // Admin tasdig'ini kutmoqda (Moderatsiya)
+    HOLD = 'HOLD',         // Vaqtincha ushlab turilgan
     DELETE = 'DELETE',     // O'chirilgan
 }
 

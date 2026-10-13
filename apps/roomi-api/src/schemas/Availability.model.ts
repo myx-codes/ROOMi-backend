@@ -38,6 +38,19 @@ export class Availability extends Document {
         default: null,
     })
     bookingId?: Types.ObjectId; // Agar band bo'lsa, qaysi bron asosida bandligini bilish uchun
+
+    @Prop({
+        type: Date,
+        default: null,
+        index: true,
+    })
+    heldUntil?: Date | null;
+
+    @Prop({
+        type: String,
+        default: 'Asia/Tashkent',
+    })
+    timezone?: string;
 }
 
 export const AvailabilitySchema = SchemaFactory.createForClass(Availability);
