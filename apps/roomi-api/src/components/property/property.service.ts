@@ -155,48 +155,56 @@ export class PropertyService {
             .lean()
             .exec();
 
-        const normalized = String(userMessage || '').toLocaleLowerCase();
+        const normalized = this.normalizeAssistantSearchText(userMessage);
+        const queryTokens = normalized.split(/\s+/).filter(Boolean);
         const requestedTypes = [
-            { type: 'VILLA', aliases: ['villa', 'dacha', 'dala hovli'] },
-            { type: 'HOTEL', aliases: ['hotel', 'mehmonxona', 'otel'] },
-            { type: 'APARTMENT', aliases: ['apartment', 'kvartira', 'xonadon'] },
-            { type: 'RESORT', aliases: ['resort', 'kurort'] },
-            { type: 'SANATORIUM', aliases: ['sanatorium', 'sanatoriy'] },
+            { type: 'VILLA', aliases: ['villa', 'dacha', 'dala hovli', '빌라', '별장', '펜션'] },
+            { type: 'HOTEL', aliases: ['hotel', 'mehmonxona', 'otel', '호텔'] },
+            { type: 'APARTMENT', aliases: ['apartment', 'kvartira', 'xonadon', '아파트'] },
+            { type: 'RESORT', aliases: ['resort', 'kurort', '리조트'] },
+            { type: 'SANATORIUM', aliases: ['sanatorium', 'sanatoriy', '요양원', '휴양소'] },
         ]
-            .filter(({ aliases }) => aliases.some((alias) => normalized.includes(alias)))
+            .filter(({ aliases }) => aliases.some((alias) => this.assistantAliasMatches(normalized, queryTokens, alias)))
             .map(({ type }) => type);
         const locationAliases: Record<string, string[]> = {
-            TASHKENT: ['tashkent', 'toshkent'],
-            SAMARKAND: ['samarkand', 'samarqand'],
-            BUKHARA: ['bukhara', 'buxoro'],
-            KHIVA: ['khiva', 'xiva'],
-            CHORVOQ: ['chorvoq', 'charvak'],
-            BOSTONLIQ: ["bo'stonliq", 'bostonliq', 'bostanlik'],
-            ZAAMIN: ['zaamin', 'zomin'],
-            CHIMGAN: ['chimgan', 'chimyon'],
+            TASHKENT: ['tashkent', 'toshkent', '타슈켄트'],
+            SAMARKAND: ['samarkand', 'samarqand', '사마르칸트'],
+            BUKHARA: ['bukhara', 'buxoro', '부하라'],
+            KHIVA: ['khiva', 'xiva', '히바'],
+            CHORVOQ: ['chorvoq', 'charvak', '차르박'],
+            BOSTONLIQ: ["bo'stonliq", 'bostonliq', 'bostanlik', '보스톤리크'],
+            ZAAMIN: ['zaamin', 'zomin', '자민'],
+            CHIMGAN: ['chimgan', 'chimyon', '침간'],
             CHODAK: ['chodak'],
-            SEOUL: ['seoul', 'seul'],
-            BUSAN: ['busan', 'pusan'],
-            INCHEON: ['incheon', 'inchon'],
-            DAEGU: ['daegu'],
-            GYEONGJU: ['gyeongju'],
-            GWANGJU: ['gwangju'],
-            CHONJU: ['chonju', 'jeonju'],
-            DAEJON: ['daejeon', 'daejon'],
-            JEJU: ['jeju'],
-            BALI: ['bali'],
+            SEOUL: ['seoul', 'seul', '서울'],
+            BUSAN: ['busan', 'pusan', '부산'],
+            INCHEON: ['incheon', 'inchon', '인천'],
+            DAEGU: ['daegu', '대구'],
+            GYEONGJU: ['gyeongju', '경주'],
+            GWANGJU: ['gwangju', '광주'],
+            CHONJU: ['chonju', 'jeonju', '전주'],
+            DAEJON: ['daejeon', 'daejon', '대전'],
+            JEJU: ['jeju', '제주'],
+            BALI: ['bali', '발리'],
         };
         const requestedLocations = Object.entries(locationAliases)
-            .filter(([, aliases]) => aliases.some((alias) => normalized.includes(alias)))
+            .filter(([, aliases]) => aliases.some((alias) => this.assistantAliasMatches(normalized, queryTokens, alias)))
             .map(([location]) => location);
-        const requestedGuests = Number(
-            normalized.match(/\b(\d{1,2})\s*(?:mehmon|kishi|odam|guest|people|person)\b/i)?.[1] ?? 0,
-        );
-        const requiresPets = /\b(?:pet|pets|uy hayvoni|hayvon bilan)\b/i.test(normalized);
-        const tokens = normalized
-            .replace(/[^\p{L}\p{N}]+/gu, ' ')
-            .split(/\s+/)
-            .filter((token) => token.length >= 4);
+        const guestMatch = normalized.match(/(\d{1,2})\s*([\p{L}]{1,14})/iu);
+        const guestUnit = guestMatch?.[2] ?? '';
+        const guestAliases = [
+            'mehmon', 'mehmonlar', 'kishi', 'kishilik', 'kishiga',
+            'odam', 'odamlik', 'odamga', 'guest', 'guests', 'people', 'person',
+            '명', '인', '사람',
+        ];
+        const requestedGuests = guestMatch && guestAliases.some((alias) =>
+            this.assistantAliasMatches(guestUnit, [guestUnit], alias),
+        )
+            ? Number(guestMatch[1])
+            : 0;
+        const requiresPets = /(?:\b(?:pet|pets|uy hayvoni|hayvon bilan)\b|반려동물|애완동물)/i.test(normalized);
+        const prefersLowPrice = /(?:\b(?:arzon|hamyonbop|byudjet|budget|cheap|affordable)\b|저렴|가성비)/i.test(normalized);
+        const tokens = queryTokens.filter((token) => token.length >= 4);
 
         const candidates = (properties as any[])
             .filter((property) => !requestedTypes.length || requestedTypes.includes(String(property.propertyType)))
@@ -212,16 +220,24 @@ export class PropertyService {
                     property.propertyDesc,
                     ...(property.propertyAmenities ?? []),
                 ].join(' ').toLocaleLowerCase();
+                const haystackTokens = this.normalizeAssistantSearchText(haystack).split(/\s+/).filter(Boolean);
                 const lexicalScore = tokens.reduce(
-                    (score, token) => score + (haystack.includes(token) ? 1 : 0),
+                    (score, token) => score + (
+                        haystack.includes(token) || haystackTokens.some((candidate) => this.isAssistantFuzzyMatch(token, candidate))
+                            ? 1
+                            : 0
+                    ),
                     0,
                 );
-                const familyScore = /oilaviy|family|children|bolalar/i.test(normalized)
+                const familyScore = /oilaviy|family|children|bolalar|가족|아이/i.test(normalized)
                     ? Math.min(Number(property.maxGuests ?? 1), 8) / 8
                     : 0;
                 return { property, score: lexicalScore + familyScore };
             })
             .sort((left, right) =>
+                (prefersLowPrice
+                    ? Number(left.property.propertyPrice ?? 0) - Number(right.property.propertyPrice ?? 0)
+                    : right.score - left.score) ||
                 right.score - left.score ||
                 Number(right.property.propertyRank ?? 0) - Number(left.property.propertyRank ?? 0) ||
                 Number(right.property.propertyLikes ?? 0) - Number(left.property.propertyLikes ?? 0) ||
@@ -233,6 +249,58 @@ export class PropertyService {
             matchedTotal: candidates.length,
             items: candidates.slice(0, Math.max(1, Math.min(limit, 12))).map(({ property }) => property),
         };
+    }
+
+    private normalizeAssistantSearchText(value: unknown): string {
+        return String(value ?? '')
+            .toLocaleLowerCase()
+            .normalize('NFC')
+            .replace(/[‘’`ʻʼ']/g, '')
+            .replace(/[^\p{L}\p{N}]+/gu, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    private assistantAliasMatches(normalized: string, queryTokens: string[], alias: string): boolean {
+        const normalizedAlias = this.normalizeAssistantSearchText(alias);
+        if (!normalizedAlias) return false;
+        if (normalized.includes(normalizedAlias)) return true;
+
+        const aliasTokens = normalizedAlias.split(/\s+/).filter(Boolean);
+        return aliasTokens.every((aliasToken) =>
+            queryTokens.some((queryToken) => this.isAssistantFuzzyMatch(queryToken, aliasToken)),
+        );
+    }
+
+    private isAssistantFuzzyMatch(left: string, right: string): boolean {
+        if (left === right) return true;
+        const shortest = Math.min(left.length, right.length);
+        if (/[가-힣]/.test(left + right) && shortest >= 2) {
+            return this.assistantEditDistance(left, right) <= 1;
+        }
+        if (shortest < 4) return false;
+        const allowedDistance = shortest <= 5 ? 1 : 2;
+        return this.assistantEditDistance(left, right) <= allowedDistance;
+    }
+
+    private assistantEditDistance(left: string, right: string): number {
+        const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+        const current = new Array<number>(right.length + 1);
+
+        for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+            current[0] = leftIndex;
+            for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+                const substitutionCost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+                current[rightIndex] = Math.min(
+                    current[rightIndex - 1] + 1,
+                    previous[rightIndex] + 1,
+                    previous[rightIndex - 1] + substitutionCost,
+                );
+            }
+            for (let index = 0; index <= right.length; index += 1) previous[index] = current[index];
+        }
+
+        return previous[right.length];
     }
 
     public async getPropertyForBooking(propertyId: Types.ObjectId): Promise<any> {

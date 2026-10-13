@@ -91,8 +91,9 @@ export class ChatService {
     ).exec();
 
     const populated = await this.populateThread(threadId);
-    const language = this.normalizeLanguage(
+    const language = this.resolveResponseLanguage(
       input.language ?? (input as any).language ?? (thread as any).language,
+      sanitizedMessage,
     );
 
     // Return the user message immediately. Ollama can take tens of seconds on
@@ -273,6 +274,10 @@ export class ChatService {
     const context = await this.buildAssistantContext(threadId, memberId, propertyId, language, userMessage);
     const structured = this.extractStructuredRequest(userMessage);
     const intent = this.detectIntent(userMessage);
+
+    if (context.language === 'ko' && /(한국어|한국말).*(말|답|써|사용)|(?:말|답|써).*(한국어|한국말)/i.test(userMessage)) {
+      return '네, 지금부터 한국어로 답변드리겠습니다. 무엇을 도와드릴까요?';
+    }
 
     if (intent === "greeting" && !structured.dateText && !structured.guestText) {
       return this.buildGreetingReply(context, userMessage);
@@ -652,7 +657,77 @@ export class ChatService {
   }
 
   private isCatalogueRecommendationRequest(userMessage: string): boolean {
-    return /(tavsiya|recommend|variant|mos joy|qaysi|topib ber|toping|izla|search|find|listing)/i.test(userMessage);
+    const normalized = this.normalizeCatalogueText(userMessage);
+    if (!normalized) return false;
+
+    if (/(tavsiya|recommend|variant|mos joy|topib ber|toping|izla|search|find|qayerda qol|dam olish|turar joy|bron qil|arzon|byudjet|추천|찾아|숙소|여행|저렴|가성비)/i.test(normalized) ||
+        /(?:\b\d{1,2}\s*(?:mehmon(?:lar)?|kishi(?:lik|ga)?|odam(?:lik|ga)?|guest(?:s)?|people|person)\b|\d{1,2}\s*(?:명|인|사람))/i.test(normalized)) {
+      return true;
+    }
+
+    // Users often type only a location/property type or make one or two
+    // spelling mistakes (for example, "toshkenda vila 4 kishilik"). Treat
+    // these short discovery queries as catalogue searches instead of forcing
+    // them into the exact quote flow.
+    const catalogueSignals = [
+      'villa', 'dacha', 'hotel', 'otel', 'mehmonxona', 'apartment', 'kvartira',
+      'xonadon', 'resort', 'kurort', 'sanatoriy', 'sanatorium', 'turarjoy',
+      'joy', 'sayohat', 'damolish', 'oila', 'oilaviy', 'family', 'bolalar',
+      'tavsiya', 'recommend', 'variant', 'kishi', 'kishilik', 'mehmon', 'odam',
+      'toshkent', 'tashkent', 'samarqand',
+      'samarkand', 'buxoro', 'bukhara', 'xiva', 'khiva', 'chorvoq', 'charvak',
+      'bostonliq', 'zomin', 'zaamin', 'chimyon', 'chimgan', 'jeju', 'seoul',
+      'busan', 'bali', 'narx',
+      '추천', '숙소', '여행', '가족', '저렴', '호텔', '빌라', '별장', '펜션',
+      '아파트', '리조트', '요양원', '휴양소', '서울', '부산', '인천', '대구',
+      '경주', '광주', '전주', '대전', '제주', '발리', '타슈켄트', '사마르칸트',
+      '부하라', '히바', '차르박', '자민', '침간',
+    ];
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    return tokens.some((token) =>
+      catalogueSignals.some((signal) => this.isCatalogueFuzzyMatch(token, signal)),
+    );
+  }
+
+  private normalizeCatalogueText(value: unknown): string {
+    return String(value ?? '')
+      .toLocaleLowerCase()
+      .normalize('NFC')
+      .replace(/[‘’`ʻʼ']/g, '')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private isCatalogueFuzzyMatch(left: string, right: string): boolean {
+    if (left === right) return true;
+    const shortest = Math.min(left.length, right.length);
+    if (/[가-힣]/.test(left + right) && shortest >= 2) {
+      return this.catalogueEditDistance(left, right) <= 1;
+    }
+    if (shortest < 4) return false;
+    const allowedDistance = shortest <= 5 ? 1 : 2;
+    return this.catalogueEditDistance(left, right) <= allowedDistance;
+  }
+
+  private catalogueEditDistance(left: string, right: string): number {
+    const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+    const current = new Array<number>(right.length + 1);
+
+    for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+      current[0] = leftIndex;
+      for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+        const substitutionCost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+        current[rightIndex] = Math.min(
+          current[rightIndex - 1] + 1,
+          previous[rightIndex] + 1,
+          previous[rightIndex - 1] + substitutionCost,
+        );
+      }
+      for (let index = 0; index <= right.length; index += 1) previous[index] = current[index];
+    }
+
+    return previous[right.length];
   }
 
   private buildGroundedCatalogReply(context: AssistantContext, userMessage: string): string | null {
@@ -682,14 +757,7 @@ export class ChatService {
       return `${index + 1}. ${title} — ${location}, ${type}; base nightly price ${price}; capacity ${capacity} guests; ${path}`;
     });
 
-    const count = context.catalogMatchedTotal;
-    if (context.language === 'ko') {
-      return `요청 조건과 일치하는 활성 숙소는 ${count}개입니다. 그중 최대 3개를 안내합니다:\n\n${rows.join('\n')}`;
-    }
-    if (context.language === 'uz') {
-      return `So‘rovingiz shartlariga mos ${count} ta ACTIVE property topildi. Ko‘pi bilan 3 tasini ko‘rsataman:\n\n${rows.join('\n')}`;
-    }
-    return `${count} ACTIVE ROOMi properties match your filters. Here are up to three:\n\n${rows.join('\n')}`;
+    return rows.join('\n');
   }
 
   private buildGroundedPlatformReply(language: SupportedLanguage, userMessage: string): string | null {
@@ -879,8 +947,8 @@ export class ChatService {
 
   private buildFallbackReply(context: AssistantContext, userMessage: string): string {
     const normalized = userMessage.toLowerCase();
-    const asksPrice = /price|narx|cost|tarif|weekend|week end/.test(normalized);
-    const asksAvailability = /available|free|bo'sh|bo'shmi|availability|band/.test(normalized);
+    const asksPrice = /price|narx|cost|tarif|weekend|week end|가격|요금|비용|얼마/.test(normalized);
+    const asksAvailability = /available|free|bo'sh|bo'shmi|availability|band|예약\s*가능|가능해|빈\s*방|공실/.test(normalized);
     const copy = this.getLanguageCopy(context.language);
     const propertyName = this.extractPropertyName(context.propertySummary);
 
@@ -896,7 +964,7 @@ export class ChatService {
       return copy.noPropertyPrice;
     }
 
-    if (/^(hi|hello|hey|salom|assalomu alaykum|salam|hola|안녕|여보세요)\b/i.test(userMessage.trim())) {
+    if (this.isGreetingMessage(userMessage)) {
       return copy.general;
     }
 
@@ -905,7 +973,7 @@ export class ChatService {
 
   private detectIntent(userMessage: string): AssistantIntent {
     const normalized = userMessage.trim().toLowerCase();
-    if (/^(hi|hello|hey|salom|assalomu alaykum|salam|hola|안녕|여보세요)\b/i.test(normalized)) {
+    if (this.isGreetingMessage(normalized)) {
       return 'greeting';
     }
 
@@ -913,15 +981,21 @@ export class ChatService {
       return 'thanks';
     }
 
-    if (/(price|narx|cost|tarif|weekend|week end|rate|to'lov|payment|summa)/i.test(normalized)) {
+    if (/(price|narx|cost|tarif|weekend|week end|rate|to'lov|payment|summa|가격|요금|비용|얼마)/i.test(normalized)) {
       return 'pricing';
     }
 
-    if (/(available|free|bo'sh|bo'shmi|availability|band|vacant|open)/i.test(normalized)) {
+    if (/(available|free|bo'sh|bo'shmi|availability|band|vacant|open|예약\s*가능|가능해|빈\s*방|공실)/i.test(normalized)) {
       return 'availability';
     }
 
     return 'general';
+  }
+
+  private isGreetingMessage(userMessage: string): boolean {
+    const normalized = userMessage.trim();
+    return /^(?:hi|hello|hey|salom|assalomu alaykum|salam|hola)\b/i.test(normalized) ||
+      /^(?:안녕(?:하세요|하십니까)?|여보세요)(?:[\s!,.?~]|$)/i.test(normalized);
   }
 
   private buildGreetingReply(context: AssistantContext, userMessage: string): string {
@@ -1046,7 +1120,7 @@ export class ChatService {
 
   private extractGuestCount(message: string): number | null {
     const normalized = message.toLowerCase().replace(/,/g, " ").replace(/\s+/g, " ").trim();
-    const numericWithUnit = normalized.match(/\b(\d{1,2})\s*(guest|guests|person|people|pax|mehmon|mehmonlar|kishi|odam)\b/i);
+    const numericWithUnit = normalized.match(/\b(\d{1,2})\s*(guest|guests|person|people|pax|mehmon|mehmonlar|kishiga|kishilik|kishi|odamga|odamlik|odam|명|인|사람)\b/i);
     if (numericWithUnit?.[1]) return this.normalizeGuestCount(Number(numericWithUnit[1]));
 
     const forNumeric = normalized.match(/\bfor\s+(\d{1,2})\b/i);
@@ -1075,7 +1149,7 @@ export class ChatService {
       on: 10,
     };
 
-    const wordWithUnit = normalized.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|bir|ikki|uch|tort|besh|olti|yetti|sakkiz|toqqiz|on)\s*(guest|guests|person|people|pax|mehmon|mehmonlar|kishi|odam)\b/i);
+    const wordWithUnit = normalized.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|bir|ikki|uch|tort|besh|olti|yetti|sakkiz|toqqiz|on)\s*(guest|guests|person|people|pax|mehmon|mehmonlar|kishiga|kishilik|kishi|odamga|odamlik|odam)\b/i);
     if (wordWithUnit?.[1]) return this.normalizeGuestCount(wordMap[wordWithUnit[1]]);
 
     return null;
@@ -1233,6 +1307,19 @@ export class ChatService {
     const normalized = String(value || '').trim().toLowerCase();
     if (normalized === 'ko' || normalized === 'uz') return normalized;
     return 'en';
+  }
+
+  private resolveResponseLanguage(value: string | null | undefined, userMessage: string): SupportedLanguage {
+    const normalizedMessage = String(userMessage || '').normalize('NFC');
+
+    // The message language must win over a stale UI preference. This also
+    // supports users who start typing Korean without changing the language
+    // selector first.
+    if (/[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/.test(normalizedMessage)) {
+      return 'ko';
+    }
+
+    return this.normalizeLanguage(value);
   }
 
   private getLanguageCopy(language: SupportedLanguage): {
